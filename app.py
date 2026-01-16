@@ -6,11 +6,11 @@ import requests
 from datetime import datetime
 import time
 
-# 1. CONFIGURATION (Doit être en haut)
-st.set_page_config(page_title="Screener Pro S&P 500", layout="wide")
+# --- 1. CONFIG ET CONNEXION ---
+st.set_page_config(page_title="Screener S&P 500", layout="wide")
 conn = st.connection("gsheets", type=GSheetsConnection)
 
-# 2. FONCTIONS DE BASE
+# --- 2. FONCTIONS (SANS CHANGEMENT) ---
 def get_sheet_data():
     try:
         return conn.read(worksheet="stock_data", ttl=0)
@@ -19,98 +19,75 @@ def get_sheet_data():
 
 def save_to_sheet(new_data):
     try:
-        # Nettoyage strict pour éviter les lignes "0" (image_2e4fec.png)
         new_data = new_data[new_data['prix'] > 0]
         if new_data.empty: return True
-        
         existing = get_sheet_data()
         updated = pd.concat([existing, new_data], ignore_index=True)
-        # Supprime les doublons pour ne pas alourdir le fichier
         updated = updated.drop_duplicates(subset=['ticker', 'date_recup'], keep='last')
         conn.update(worksheet="stock_data", data=updated)
         return True
-    except Exception as e:
-        if "200" in str(e): return True
+    except:
         return False
 
-@st.cache_data(ttl=86400)
-def get_wiki_tickers(index_name):
-    header = {"User-Agent": "Mozilla/5.0"}
-    try:
-        if index_name == "S&P 500":
-            url = "https://en.wikipedia.org/wiki/List_of_S%26P_500_companies"
-            df = pd.read_html(requests.get(url, headers=header).text)[0]
-            return df['Symbol'].str.replace('.', '-', regex=True).tolist()
-        else:
-            url = "https://en.wikipedia.org/wiki/CAC_40"
-            df = [t for t in pd.read_html(requests.get(url, headers=header).text) if 'Ticker' in t.columns][0]
-            return [f"{t}.PA" if not str(t).endswith(".PA") else t for t in df['Ticker']]
-    except: return []
-
-# 3. INTERFACE ET LOGIQUE
-st.title("🛡️ Screener Intelligent & Archive Cloud")
+# --- 3. LOGIQUE DE CALCUL (DOIT ÊTRE ICI) ---
 index_choice = st.sidebar.selectbox("Indice", ["S&P 500", "CAC 40"])
 today = datetime.now().strftime('%Y-%m-%d')
 
-# --- DEFINITION DES VARIABLES (Règle l'erreur image_2e5710.png) ---
-wiki_tickers = get_wiki_tickers(index_choice)
-stored_df = get_sheet_data()
+# Récupération Wikipedia
+header = {"User-Agent": "Mozilla/5.0"}
+if index_choice == "S&P 500":
+    url = "https://en.wikipedia.org/wiki/List_of_S%26P_500_companies"
+    wiki_tickers = pd.read_html(requests.get(url, headers=header).text)[0]['Symbol'].str.replace('.', '-', regex=True).tolist()
+else:
+    url = "https://en.wikipedia.org/wiki/CAC_40"
+    df_wiki = [t for t in pd.read_html(requests.get(url, headers=header).text) if 'Ticker' in t.columns][0]
+    wiki_tickers = [f"{t}.PA" if not str(t).endswith(".PA") else t for t in df_wiki['Ticker']]
 
+# Comparaison avec la base
+stored_df = get_sheet_data()
 synced_today = []
 if not stored_df.empty and 'date_recup' in stored_df.columns:
     synced_today = stored_df[stored_df['date_recup'] == today]['ticker'].tolist()
 
+# ICI ON DÉFINIT ENFIN LA VARIABLE QUI POSAIT ERREUR
 missing_tickers = [t for t in wiki_tickers if t not in synced_today]
 
-# 4. AFFICHAGE DES METRICS
+# --- 4. INTERFACE ---
+st.title("🛡️ Analyse S&P 500 en cours")
 c1, c2, c3 = st.columns(3)
-c1.metric(f"Total {index_choice}", len(wiki_tickers))
-c2.metric("En Base (Aujourd'hui)", len(synced_today))
-c3.metric("À récupérer", len(missing_tickers))
+c1.metric("Total Indice", len(wiki_tickers))
+c2.metric("Déjà en base", len(synced_today))
+c3.metric("Restant à scanner", len(missing_tickers))
 
-# 5. BOUCLE DE RÉCUPÉRATION SÉCURISÉE
 if len(missing_tickers) > 0:
-    if st.button(f"📥 Lancer la récupération"):
+    if st.button(f"🚀 Lancer le scan des {len(missing_tickers)} actions"):
         new_records = []
         bar = st.progress(0)
         status = st.empty()
         
         for i, t in enumerate(missing_tickers):
             try:
-                # On évite les tickers invalides comme "---" (image_2e4c63.png)
-                if len(t) < 2 or t.startswith("-"): continue
-                
-                status.text(f"Analyse de {t} ({i+1}/{len(missing_tickers)})...")
+                status.text(f"Extraction Yahoo : {t} ({i+1}/{len(missing_tickers)})")
                 info = yf.Ticker(t).info
-                price = info.get("currentPrice")
-                
-                if price and price > 0:
+                p = info.get("currentPrice")
+                if p:
                     new_records.append({
                         "ticker": t,
                         "roe": round(info.get("returnOnEquity", 0) * 100, 2),
                         "peg": info.get("trailingPegRatio", info.get("pegRatio", 0)),
-                        "prix": price,
+                        "prix": p,
                         "date_recup": today
                     })
                 
-                # SAUVEGARDE PAR BLOCS (Crucial pour ne rien perdre)
+                # Sauvegarde par mini-blocs de 5 pour voir le Sheet se remplir
                 if len(new_records) >= 5:
                     save_to_sheet(pd.DataFrame(new_records))
                     new_records = []
-                
-                time.sleep(0.4) 
-            except: continue
+                time.sleep(0.4)
+            except:
+                continue
             bar.progress((i + 1) / len(missing_tickers))
         
         if new_records:
             save_to_sheet(pd.DataFrame(new_records))
-        st.success("Terminé !")
         st.rerun()
-
-# 6. AFFICHAGE DU TABLEAU
-st.divider()
-if not stored_df.empty:
-    mask = (stored_df['ticker'].isin(wiki_tickers)) & (stored_df['date_recup'] == today)
-    display_df = stored_df[mask].sort_values("roe", ascending=False)
-    st.subheader(f"✨ Résultats {index_choice}")
-    st.dataframe(display_df, use_container_width=True, hide_index=True)
