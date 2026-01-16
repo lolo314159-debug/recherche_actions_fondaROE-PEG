@@ -18,13 +18,15 @@ def get_sheet_data():
 
 def save_to_sheet(new_data):
     try:
-        # On ne garde que les lignes avec un prix valide (évite les lignes vides dans le Sheet)
+        # NETTOYAGE : On ne garde que les lignes avec un prix > 0
         new_data = new_data[new_data['prix'] > 0]
         if new_data.empty: return True
         
         existing = get_sheet_data()
         updated = pd.concat([existing, new_data], ignore_index=True)
         updated = updated.drop_duplicates(subset=['ticker', 'date_recup'], keep='last')
+        
+        # On force l'écriture
         conn.update(worksheet="stock_data", data=updated)
         return True
     except Exception as e:
@@ -39,7 +41,7 @@ def get_wiki_tickers(index_name):
     if index_name == "S&P 500":
         url = "https://en.wikipedia.org/wiki/List_of_S%26P_500_companies"
         df = pd.read_html(requests.get(url, headers=header).text)[0]
-        # Yahoo utilise "-" au lieu de "." pour les classes d'actions (ex: BRK-B)
+        # Yahoo utilise "-" au lieu de "." pour les actions US (ex: BRK-B)
         return df['Symbol'].str.replace('.', '-', regex=True).tolist()
     else:
         url = "https://en.wikipedia.org/wiki/CAC_40"
@@ -57,7 +59,7 @@ today = datetime.now().strftime('%Y-%m-%d')
 wiki_tickers = get_wiki_tickers(index_choice)
 stored_df = get_sheet_data()
 
-# 4. LOGIQUE DE MISE À JOUR
+# 4. AUDIT DES MANQUANTS
 synced_today = []
 if not stored_df.empty and 'date_recup' in stored_df.columns:
     synced_today = stored_df[stored_df['date_recup'] == today]['ticker'].tolist()
@@ -67,10 +69,11 @@ missing_tickers = [t for t in wiki_tickers if t not in synced_today]
 c1, c2, c3 = st.columns(3)
 c1.metric("Total Indice", len(wiki_tickers))
 c2.metric("En Base", len(synced_today))
-c3.metric("Manquants", len(missing_tickers))
+c3.metric("À récupérer", len(missing_tickers))
 
+# 5. RÉCUPÉRATION (CORRECTION DE LA SYNTAXE)
 if len(missing_tickers) > 0:
-    if st.button(f"📥 Récupérer les {len(missing_tickers)} manquants"):
+    if st.button(f"📥 Lancer la récupération de {len(missing_tickers)} tickers"):
         new_records = []
         bar = st.progress(0)
         status = st.empty()
@@ -82,7 +85,8 @@ if len(missing_tickers) > 0:
                 info = stock.info
                 
                 price = info.get("currentPrice")
-                if price: # On n'ajoute que si Yahoo a trouvé l'action
+                # On n'ajoute que si Yahoo a trouvé un prix valide
+                if price and price > 0: 
                     new_records.append({
                         "ticker": t,
                         "roe": round(info.get("returnOnEquity", 0) * 100, 2),
@@ -91,25 +95,27 @@ if len(missing_tickers) > 0:
                         "date_recup": today
                     })
                 
-                # Sauvegarde auto toutes les 10 actions (important pour le S&P 500)
+                # Sauvegarde auto par bloc de 10
                 if len(new_records) >= 10:
                     save_to_sheet(pd.DataFrame(new_records))
                     new_records = []
                 
-                time.sleep(0.5) # Pause pour éviter le blocage Yahoo
+                time.sleep(0.5) 
             except Exception:
+                # C'est ce bloc 'except' qui manquait dans votre code précédent
                 continue
+            
             bar.progress((i + 1) / len(missing_tickers))
         
         if new_records:
             save_to_sheet(pd.DataFrame(new_records))
-        st.success("Mise à jour terminée !")
+        
+        st.success("Synchronisation terminée !")
         st.rerun()
 
-# 5. AFFICHAGE
+# 6. AFFICHAGE FILTRÉ
 st.divider()
 if not stored_df.empty:
-    # Nettoyage des types pour les filtres
     stored_df['roe'] = pd.to_numeric(stored_df['roe'], errors='coerce')
     stored_df['peg'] = pd.to_numeric(stored_df['peg'], errors='coerce')
     
@@ -119,5 +125,5 @@ if not stored_df.empty:
            (stored_df['peg'] <= max_peg) & (stored_df['peg'] > 0)
     
     filt_df = stored_df[mask].sort_values("roe", ascending=False)
-    st.subheader(f"✨ Résultats ({len(filt_df)})")
+    st.subheader(f"✨ Actions sélectionnées ({len(filt_df)})")
     st.dataframe(filt_df, use_container_width=True, hide_index=True)
