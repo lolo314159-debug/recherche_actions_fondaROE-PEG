@@ -2,5 +2,5 @@ streamlit
 yfinance
 pandas
 lxml
-html5lib
 requests
+st-gsheets-connection
