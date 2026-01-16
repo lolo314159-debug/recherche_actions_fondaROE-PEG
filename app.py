@@ -1,65 +1,69 @@
 import streamlit as st
-import yfinance as yf
 import pandas as pd
+import yfinance as yf
 
-# Configuration de la page
-st.set_page_config(page_title="Fin-Scanner Online", layout="wide")
+st.set_page_config(page_title="Screener Dynamique", layout="wide")
 
-# --- FONCTION DE RÉCUPÉRATION AVEC CACHE ---
-@st.cache_data(ttl=3600)  # Garde les données en mémoire 1 heure
-def load_data(tickers):
-    results = []
-    for t in tickers:
+# --- ÉTAPE 1 : RÉCUPÉRATION DYNAMIQUE DES TICKERS ---
+@st.cache_data(ttl=86400) # Mise à jour une fois par 24h
+def get_index_tickers(index_name):
+    if index_name == "S&P 500":
+        url = "https://en.wikipedia.org/wiki/List_of_S%26P_500_companies"
+        table = pd.read_html(url)[0]
+        # Yahoo utilise "-" au lieu de "." pour les classes d'actions (ex: BRK.B -> BRK-B)
+        return table['Symbol'].str.replace('.', '-', regex=True).tolist()
+    
+    elif index_name == "CAC 40":
+        url = "https://en.wikipedia.org/wiki/CAC_40"
+        table = pd.read_html(url)[4] # La 5ème table contient les composants
+        tickers = table['Ticker'].tolist()
+        # On s'assure que le suffixe .PA est présent pour Paris
+        return [t if t.endswith(".PA") else f"{t}.PA" for t in tickers]
+    return []
+
+# --- ÉTAPE 2 : TÉLÉCHARGEMENT DES DONNÉES FONDAMENTALES ---
+@st.cache_data(ttl=3600)
+def fetch_fundamental_data(tickers):
+    data_list = []
+    progress_bar = st.progress(0)
+    for i, ticker in enumerate(tickers):
         try:
-            s = yf.Ticker(t)
-            info = s.info
-            results.append({
-                "Ticker": t,
-                "Nom": info.get("shortName"),
-                "ROE": info.get("returnOnEquity", 0),
-                "PEG": info.get("trailingPegRatio", 0),
-                "Secteur": info.get("sector")
+            stock = yf.Ticker(ticker)
+            info = stock.info
+            data_list.append({
+                "Ticker": ticker,
+                "Nom": info.get("longName"),
+                "ROE (%)": info.get("returnOnEquity", 0) * 100,
+                "PEG": info.get("trailingPegRatio", info.get("pegRatio", 0)),
+                "Secteur": info.get("sector"),
+                "Prix": info.get("currentPrice")
             })
         except:
             continue
-    return pd.DataFrame(results)
+        progress_bar.progress((i + 1) / len(tickers))
+    return pd.DataFrame(data_list)
 
-# --- INTERFACE ---
-st.title("🚀 Screener Fondamental en Ligne")
-
-# Listes d'actions par zone
-MARKETS = {
-    "USA (S&P500)": ["AAPL", "MSFT", "GOOGL", "AMZN", "META", "NVDA", "BRK-B"],
-    "France (CAC40)": ["MC.PA", "OR.PA", "TTE.PA", "SAN.PA", "AIR.PA", "RMS.PA"],
-    "Europe (Mix)": ["ASML", "SAP", "NVO", "SIE.DE", "IDEXY"]
-}
+# --- INTERFACE UTILISATEUR ---
+st.title("🔍 Screener Fondamental (Live Index)")
 
 with st.sidebar:
-    st.header("Paramètres")
-    zone = st.selectbox("Choisir une zone", list(MARKETS.keys()))
-    roe_min = st.number_input("ROE Minimum (ex: 0.15 pour 15%)", value=0.15)
-    peg_max = st.number_input("PEG Maximum", value=1.5)
+    st.header("Filtres")
+    selected_index = st.selectbox("Indice à scanner", ["CAC 40", "S&P 500"])
+    min_roe = st.slider("ROE Minimum (%)", 0, 50, 15)
+    max_peg = st.slider("PEG Maximum", 0.0, 3.0, 1.2)
     
-    st.divider()
-    ticker_input = st.text_input("Recherche rapide (ex: TSLA)").upper()
+    if st.button("🔄 Forcer la mise à jour"):
+        st.cache_data.clear()
+        st.rerun()
 
-# --- LOGIQUE ---
-data_load_state = st.text('Chargement des données du marché...')
-df = load_data(MARKETS[zone])
-data_load_state.empty()
+# Logique de calcul
+tickers = get_index_tickers(selected_index)
+st.info(f"Composants détectés pour {selected_index} : {len(tickers)}")
+
+df = fetch_fundamental_data(tickers)
 
 # Filtrage
-filtered_df = df[(df['ROE'] >= roe_min) & (df['PEG'] <= peg_max) & (df['PEG'] > 0)]
+filtered_df = df[(df["ROE (%)"] >= min_roe) & (df["PEG"] <= max_peg) & (df["PEG"] > 0)]
 
-# Affichage
-col1, col2 = st.columns([2, 1])
-
-with col1:
-    st.subheader(f"Résultats pour {zone}")
-    st.dataframe(filtered_df, use_container_width=True)
-
-with col2:
-    if ticker_input:
-        st.subheader(f"Focus : {ticker_input}")
-        single_data = load_data([ticker_input])
-        st.write(single_data)
+st.subheader(f"Résultats du filtrage ({len(filtered_df)} actions)")
+st.dataframe(filtered_df.sort_values("ROE (%)", ascending=False), use_container_width=True)
