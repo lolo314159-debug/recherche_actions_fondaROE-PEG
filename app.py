@@ -33,38 +33,42 @@ st.title("🛡️ Screener Stable & Répertoire")
 
 # --- ETAPE 1 : RÉPERTOIRE (index_composition) ---
 with st.expander("📁 Gérer le répertoire (index_composition)"):
-    if st.button("🔄 Forcer la mise à jour des indices"):
-        with st.spinner("Extraction intelligente..."):
-            header = {"User-Agent": "Mozilla/5.0"}
-            
-            # CAC 40 - Détection flexible des colonnes
-            r_cac = requests.get("https://en.wikipedia.org/wiki/CAC_40", headers=header)
-            tabs_cac = pd.read_html(r_cac.text)
-            df_cac_raw = [t for t in tabs_cac if any('icker' in str(c) for c in t.columns)][0]
-            # On prend la 1ère colonne pour le ticker et la 2ème pour le nom
-            df_cac = pd.DataFrame({
-                'ticker': df_cac_raw.iloc[:, 0].astype(str) + ".PA",
-                'nom': df_cac_raw.iloc[:, 1],
-                'indice': 'CAC 40'
-            })
-            
-            # S&P 500 - Détection flexible
-            r_sp = requests.get("https://en.wikipedia.org/wiki/List_of_S%26P_500_companies", headers=header)
-            df_sp_raw = pd.read_html(r_sp.text)[0]
-            df_sp = pd.DataFrame({
-                'ticker': df_sp_raw.iloc[:, 0].str.replace('.', '-', regex=True),
-                'nom': df_sp_raw.iloc[:, 1],
-                'indice': 'S&P 500'
-            })
-            
-            # Nettoyage des tirets (image_2ede2f.png)
-            full_comp = pd.concat([df_cac, df_sp])
-            full_comp = full_comp[full_comp['ticker'].str.contains(r'[A-Za-z]', na=False)]
-            full_comp['date_recup'] = today
-            
-            conn.update(worksheet="index_composition", data=full_comp)
-            st.success("Répertoire mis à jour !")
-            st.rerun()
+# --- REMPLACEZ LE BLOC DE MISE À JOUR PAR CELUI-CI ---
+
+if st.button("🧹 Réparer et Synchroniser le Répertoire"):
+    with st.spinner("Alignement des colonnes Wikipedia..."):
+        header = {"User-Agent": "Mozilla/5.0"}
+        
+        # --- TRAITEMENT CAC 40 ---
+        r_cac = requests.get("https://en.wikipedia.org/wiki/CAC_40", headers=header)
+        df_cac_raw = pd.read_html(r_cac.text)[0]
+        # Colonne 0 = Company (Nom), Colonne 3 = Ticker
+        df_cac = pd.DataFrame({
+            'ticker': df_cac_raw.iloc[:, 3].astype(str),
+            'nom': df_cac_raw.iloc[:, 0].astype(str),
+            'indice': 'CAC 40'
+        })
+
+        # --- TRAITEMENT S&P 500 ---
+        r_sp = requests.get("https://en.wikipedia.org/wiki/List_of_S%26P_500_companies", headers=header)
+        df_sp_raw = pd.read_html(r_sp.text)[0]
+        # Colonne 0 = Symbol (Ticker), Colonne 1 = Security (Nom)
+        df_sp = pd.DataFrame({
+            'ticker': df_sp_raw.iloc[:, 0].astype(str).str.replace('.', '-', regex=True),
+            'nom': df_sp_raw.iloc[:, 1].astype(str),
+            'indice': 'S&P 500'
+        })
+
+        # --- NETTOYAGE DES TIRETS ET DOUBLONS ---
+        full_comp = pd.concat([df_cac, df_sp])
+        # Filtre de sécurité : le ticker doit contenir au moins une lettre
+        full_comp = full_comp[full_comp['ticker'].str.contains(r'[A-Za-z]', na=False)]
+        full_comp['date_recup'] = today
+        
+        # Mise à jour de la feuille
+        conn.update(worksheet="index_composition", data=full_comp)
+        st.success("Répertoire synchronisé : Noms et Tickers sont maintenant alignés !")
+        st.rerun()
     
     st.dataframe(df_comp, use_container_width=True, hide_index=True)
 
