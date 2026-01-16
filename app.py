@@ -83,4 +83,4 @@ if not df_list.empty:
                         "Résumé": info.get("longBusinessSummary")
                     })
             except:
-                st.error("Désolé, Yahoo
+                st.error("Désolé, Yahoo Finance bloque l'accès à ces données pour le moment.")
