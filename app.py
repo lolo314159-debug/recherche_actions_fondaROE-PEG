@@ -85,4 +85,30 @@ if not df_comp.empty:
         selected_name = st.selectbox("Sélectionner l'action", names)
     
     # Récupération du ticker correspondant
-    ticker = df_comp[df_comp['nom'] == selected
+    ticker = df_comp[df_comp['nom'] == selected_name]['ticker'].values[0]
+    
+    if st.button(f"📊 Lancer l'analyse pour {selected_name}"):
+        try:
+            stock = yf.Ticker(ticker)
+            info = stock.info
+            
+            new_val = pd.DataFrame([{
+                "ticker": ticker,
+                "roe": round(info.get("returnOnEquity", 0) * 100, 2),
+                "peg": info.get("trailingPegRatio", info.get("pegRatio", 0)),
+                "prix": info.get("currentPrice", 0),
+                "date_recup": today  # Date ajoutée ici pour les données financières
+            }])
+            
+            if save_data(new_val, "stock_data"):
+                st.success(f"Données de {ticker} mises à jour au {today}")
+        except Exception as e:
+            st.error(f"Erreur Yahoo : {e}")
+
+# SECTION 3 : AFFICHAGE DES RÉSULTATS FILTRÉS
+st.divider()
+df_res = get_data("stock_data")
+if not df_res.empty:
+    st.subheader("✨ Vos analyses enregistrées")
+    # On affiche tout pour vérification, avec la date
+    st.dataframe(df_res.sort_values("date_recup", ascending=False), use_container_width=True, hide_index=True)
