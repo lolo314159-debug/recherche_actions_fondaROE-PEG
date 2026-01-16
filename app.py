@@ -3,83 +3,74 @@ from streamlit_gsheets import GSheetsConnection
 import pandas as pd
 import yfinance as yf
 from datetime import datetime
-import time
 
-st.set_page_config(page_title="Scanner Finance - Cloud Save", layout="wide")
+st.set_page_config(page_title="Screener Public Cloud", layout="wide")
 
-# --- CONNEXION GOOGLE SHEETS ---
-# Note : L'URL doit être configurée dans .streamlit/secrets.toml ou passée directement
-url = "VOTRE_URL_GOOGLE_SHEET_ICI"
+# --- CONNEXION SIMPLE ---
+# Remplace par l'URL de ton sheet partagé en "Éditeur"
+URL_SHEET = "REMPLACE_PAR_TON_LIEN_GOOGLE_SHEET"
+
 conn = st.connection("gsheets", type=GSheetsConnection)
 
-def get_stored_data(worksheet_name):
+def load_archive():
     try:
-        return conn.read(spreadsheet=url, worksheet=worksheet_name)
+        # Lit la feuille "stock_data"
+        return conn.read(spreadsheet=URL_SHEET, worksheet="stock_data")
     except:
-        return pd.DataFrame()
+        # Si la feuille est vide ou n'existe pas encore
+        return pd.DataFrame(columns=["ticker", "nom", "roe", "peg", "prix", "date_recup"])
 
-def save_to_sheet(df, worksheet_name):
-    existing_data = get_stored_data(worksheet_name)
-    updated_data = pd.concat([existing_data, df], ignore_index=True).drop_duplicates()
-    conn.update(spreadsheet=url, worksheet=worksheet_name, data=updated_data)
-
-# --- LOGIQUE DE RÉCUPÉRATION ---
-@st.cache_data(ttl=3600)
-def fetch_and_save_stock(ticker):
-    today = datetime.now().strftime('%Y-%m-%d')
+def save_data(new_row_df):
+    existing = load_archive()
+    # On ajoute la nouvelle ligne et on enlève les doublons (même ticker, même jour)
+    updated = pd.concat([existing, new_row_df], ignore_index=True)
+    updated = updated.drop_duplicates(subset=['ticker', 'date_recup'], keep='last')
     
-    # Vérifier si on a déjà la donnée du jour dans le Sheet
-    stored_stocks = get_stored_data("stock_data")
-    if not stored_stocks.empty:
-        match = stored_stocks[(stored_stocks['ticker'] == ticker) & (stored_stocks['date_recup'] == today)]
-        if not match.empty:
-            return match.iloc[0].to_dict()
-
-    # Sinon, appel Yahoo Finance
-    try:
-        s = yf.Ticker(ticker)
-        info = s.info
-        new_data = {
-            "ticker": ticker,
-            "roe": round(info.get("returnOnEquity", 0) * 100, 2),
-            "peg": info.get("trailingPegRatio", info.get("pegRatio", 0)),
-            "prix": info.get("currentPrice", 0),
-            "date_recup": today
-        }
-        # Sauvegarde immédiate dans le Sheet
-        save_to_sheet(pd.DataFrame([new_data]), "stock_data")
-        return new_data
-    except:
-        return None
+    # On renvoie tout vers Google Sheets
+    conn.update(spreadsheet=URL_SHEET, worksheet="stock_data", data=updated)
+    st.cache_data.clear()
 
 # --- INTERFACE ---
-st.title("📈 Screener avec Sauvegarde Google Sheets")
+st.title("🚀 Screener Fondamental (Mode Public)")
+st.info("Données sauvegardées sur Google Sheets sans compte de service.")
 
-index_choice = st.sidebar.selectbox("Indice", ["CAC 40", "S&P 500"])
+ticker = st.text_input("Rechercher un Ticker (ex: MC.PA, ASML, NVDA)", "").upper()
 
-# 1. Gestion de la composition (simplifiée pour l'exemple)
-if st.button("Actualiser la liste des actions"):
-    # Ici vous mettriez votre fonction Wikipedia habituelle
-    # Puis save_to_sheet(df, "index_composition")
-    st.info("Liste mise à jour (simulation)")
+if ticker:
+    today = datetime.now().strftime('%Y-%m-%d')
+    archive = load_archive()
+    
+    # Vérification dans l'archive
+    match = archive[(archive['ticker'] == ticker) & (archive['date_recup'] == today)]
+    
+    if not match.empty:
+        st.success(f"Donnée récupérée depuis l'archive (Date: {today})")
+        data = match.iloc[0].to_dict()
+    else:
+        with st.spinner(f"Appel Yahoo Finance pour {ticker}..."):
+            try:
+                stock = yf.Ticker(ticker)
+                info = stock.info
+                data = {
+                    "ticker": ticker,
+                    "nom": info.get("longName", "N/A"),
+                    "roe": round(info.get("returnOnEquity", 0) * 100, 2),
+                    "peg": info.get("trailingPegRatio", info.get("pegRatio", 0)),
+                    "prix": info.get("currentPrice", 0),
+                    "date_recup": today
+                }
+                # Sauvegarde auto
+                save_data(pd.DataFrame([data]))
+            except:
+                st.error("Erreur Yahoo (Ticker invalide ou blocage).")
+                data = None
 
-# 2. Analyse et archivage automatique
-st.subheader("Analyse d'une action")
-ticker_to_scan = st.text_input("Entrez un ticker (ex: MC.PA, TSLA)").upper()
+    if data:
+        c1, c2, c3 = st.columns(3)
+        c1.metric("ROE (%)", f"{data['roe']}%")
+        c2.metric("PEG Ratio", data['peg'])
+        c3.metric("Prix", f"{data['prix']}")
 
-if ticker_to_scan:
-    with st.spinner("Recherche et archivage..."):
-        data = fetch_and_save_stock(ticker_to_scan)
-        if data:
-            st.write(f"### Données pour {ticker_to_scan}")
-            col1, col2, col3 = st.columns(3)
-            col1.metric("ROE", f"{data['roe']}%")
-            col2.metric("PEG", data['peg'])
-            col3.metric("Prix", data['prix'])
-            st.success(f"Donnée archivée dans Google Sheets à la date du {data['date_recup']}")
-        else:
-            st.error("Erreur Yahoo Finance (Blocage ou Ticker invalide)")
-
-# 3. Affichage de l'archive
-if st.checkbox("Afficher l'historique complet du Google Sheet"):
-    st.dataframe(get_stored_data("stock_data"))
+st.divider()
+if st.checkbox("Afficher la base de données (Google Sheets)"):
+    st.dataframe(load_archive(), use_container_width=True)
