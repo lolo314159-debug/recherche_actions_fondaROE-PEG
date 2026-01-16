@@ -10,26 +10,38 @@ st.set_page_config(page_title="Guide des Actions & Tickers", layout="wide")
 def get_index_data(index_name):
     header = {"User-Agent": "Mozilla/5.0"}
     try:
-        if index_name == "S&P 500 (USA)":
+        if "S&P 500" in index_name:
             url = "https://en.wikipedia.org/wiki/List_of_S%26P_500_companies"
             res = requests.get(url, headers=header)
-            df = pd.read_html(res.text)[0]
-            # Nettoyage pour Yahoo Finance
-            df['Ticker_Yahoo'] = df['Symbol'].str.replace('.', '-', regex=True)
-            return df[['Security', 'Ticker_Yahoo', 'GICS Sector']]
+            # On récupère toutes les tables de la page
+            tables = pd.read_html(res.text)
+            
+            # On cherche spécifiquement la table qui contient la colonne 'Symbol'
+            df = None
+            for t in tables:
+                if 'Symbol' in t.columns:
+                    df = t
+                    break
+            
+            if df is not None:
+                # Yahoo utilise des tirets au lieu des points pour les classes d'actions (ex: BRK.B -> BRK-B)
+                df['Ticker_Yahoo'] = df['Symbol'].str.replace('.', '-', regex=True)
+                # On renomme 'Security' en 'Company' pour harmoniser avec le CAC 40
+                df = df.rename(columns={'Security': 'Company'})
+                return df[['Company', 'Ticker_Yahoo', 'GICS Sector']]
         
-        elif index_name == "CAC 40 (France)":
+        elif "CAC 40" in index_name:
             url = "https://en.wikipedia.org/wiki/CAC_40"
             res = requests.get(url, headers=header)
             tables = pd.read_html(res.text)
+            # On cherche la table avec la colonne 'Ticker'
             df = [t for t in tables if 'Ticker' in t.columns][0]
-            # Ajout du suffixe .PA pour Paris
             df['Ticker_Yahoo'] = df['Ticker'].apply(lambda x: f"{x}.PA" if not str(x).endswith(".PA") else x)
             return df[['Company', 'Ticker_Yahoo', 'Sector']]
+            
     except Exception as e:
-        st.error(f"Erreur lors de la lecture de la liste : {e}")
-        return pd.DataFrame()
-
+        st.error(f"Erreur de lecture : {e}")
+    return pd.DataFrame()
 # --- INTERFACE ---
 st.title("📊 Liste des Actions et Analyse Fondamentale")
 
