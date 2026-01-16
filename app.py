@@ -3,74 +3,70 @@ import pandas as pd
 import yfinance as yf
 import requests
 
-# --- ÉTAPE 1 : RÉCUPÉRATION AVEC SIGNATURE (USER-AGENT) ---
+st.set_page_config(page_title="Screener Pro", layout="wide")
+
+# --- RÉCUPÉRATION DES TICKERS ---
 @st.cache_data(ttl=86400)
 def get_index_tickers(index_name):
-    header = {
-      "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36"
-    }
-    
+    header = {"User-Agent": "Mozilla/5.0"}
     if index_name == "S&P 500":
         url = "https://en.wikipedia.org/wiki/List_of_S%26P_500_companies"
         res = requests.get(url, headers=header)
-        tables = pd.read_html(res.text)
-        df = [t for t in tables if 'Symbol' in t.columns][0]
+        df = pd.read_html(res.text)[0]
         return df['Symbol'].str.replace('.', '-', regex=True).tolist()
-    
-    elif index_name == "CAC 40":
+    else:
         url = "https://en.wikipedia.org/wiki/CAC_40"
         res = requests.get(url, headers=header)
         tables = pd.read_html(res.text)
-        # On cherche la table qui contient la colonne 'Ticker'
         df = [t for t in tables if 'Ticker' in t.columns][0]
-        tickers = df['Ticker'].tolist()
-        return [t if t.endswith(".PA") else f"{t}.PA" for t in tickers]
-    return []
+        return [f"{t}.PA" if not str(t).endswith(".PA") else t for t in df['Ticker']]
 
-
-# --- ÉTAPE 2 : TÉLÉCHARGEMENT DES DONNÉES FONDAMENTALES ---
+# --- RÉCUPÉRATION DES DONNÉES ---
 @st.cache_data(ttl=3600)
-def fetch_fundamental_data(tickers):
-    data_list = []
+def fetch_data(tickers):
+    results = []
     progress_bar = st.progress(0)
-    for i, ticker in enumerate(tickers):
+    for i, t in enumerate(tickers):
         try:
-            stock = yf.Ticker(ticker)
-            info = stock.info
-            data_list.append({
-                "Ticker": ticker,
-                "Nom": info.get("longName"),
+            s = yf.Ticker(t)
+            info = s.info
+            results.append({
+                "Ticker": t,
+                "Nom": info.get("longName", "N/A"),
                 "ROE (%)": info.get("returnOnEquity", 0) * 100,
                 "PEG": info.get("trailingPegRatio", info.get("pegRatio", 0)),
-                "Secteur": info.get("sector"),
-                "Prix": info.get("currentPrice")
+                "Secteur": info.get("sector", "N/A")
             })
         except:
             continue
         progress_bar.progress((i + 1) / len(tickers))
-    return pd.DataFrame(data_list)
+    progress_bar.empty()
+    return pd.DataFrame(results)
 
-# --- INTERFACE UTILISATEUR ---
-st.title("🔍 Screener Fondamental (Live Index)")
+# --- INTERFACE ---
+st.title("🔍 Scanner de Qualité Financière")
 
 with st.sidebar:
-    st.header("Filtres")
-    selected_index = st.selectbox("Indice à scanner", ["CAC 40", "S&P 500"])
-    min_roe = st.slider("ROE Minimum (%)", 0, 50, 15)
-    max_peg = st.slider("PEG Maximum", 0.0, 3.0, 1.2)
+    index_choice = st.selectbox("Indice", ["CAC 40", "S&P 500"])
+    min_roe = st.slider("ROE Min (%)", 0, 50, 15)
+    max_peg = st.slider("PEG Max", 0.0, 3.0, 1.5)
+    st.divider()
+    search = st.text_input("Recherche Ticker (ex: AAPL)").upper()
+
+# Exécution
+tickers = get_index_tickers(index_choice)
+df = fetch_data(tickers)
+
+if not df.empty:
+    # Sécurité pour la KeyError
+    mask = (df["ROE (%)"] >= min_roe) & (df["PEG"] <= max_peg) & (df["PEG"] > 0)
+    filtered_df = df[mask]
     
-    if st.button("🔄 Forcer la mise à jour"):
-        st.cache_data.clear()
-        st.rerun()
-
-# Logique de calcul
-tickers = get_index_tickers(selected_index)
-st.info(f"Composants détectés pour {selected_index} : {len(tickers)}")
-
-df = fetch_fundamental_data(tickers)
-
-# Filtrage
-filtered_df = df[(df["ROE (%)"] >= min_roe) & (df["PEG"] <= max_peg) & (df["PEG"] > 0)]
-
-st.subheader(f"Résultats du filtrage ({len(filtered_df)} actions)")
-st.dataframe(filtered_df.sort_values("ROE (%)", ascending=False), use_container_width=True)
+    if search:
+        st.subheader(f"Résultat pour {search}")
+        st.write(fetch_data([search]))
+    
+    st.subheader(f"Actions filtrées ({len(filtered_df)})")
+    st.dataframe(filtered_df.sort_values("ROE (%)", ascending=False), use_container_width=True)
+else:
+    st.error("Impossible de récupérer les données financières.")
