@@ -3,21 +3,33 @@ from streamlit_gsheets import GSheetsConnection
 import pandas as pd
 from datetime import datetime
 
-# Connexion sécurisée
-conn = st.connection("gsheets", type=GSheetsConnection)
+st.set_page_config(page_title="Test Final Connexion", layout="wide")
 
-st.title("Test de Connexion Sécurisée")
+# Connexion via les Secrets
+try:
+    conn = st.connection("gsheets", type=GSheetsConnection)
+except Exception as e:
+    st.error(f"Erreur de configuration : {e}")
 
-if st.button("Écrire une ligne de test"):
-    test_df = pd.DataFrame([{
-        "ticker": "TEST_OK",
-        "date_recup": datetime.now().strftime('%Y-%m-%d %H:%M')
-    }])
-    
-    # On lit l'existant pour ne pas l'écraser
-    existing = conn.read(worksheet="stock_data")
-    updated = pd.concat([existing, test_df], ignore_index=True)
-    
-    # Écriture
-    conn.update(worksheet="stock_data", data=updated)
-    st.success("Bravo ! Le script a réussi à écrire dans votre Google Sheet.")
+st.title("🛡️ Vérification de la Liaison Cloud")
+
+if st.button("📝 Tester l'écriture immédiate"):
+    try:
+        # Création d'une ligne de test
+        test_data = pd.DataFrame([{
+            "ticker": "CONNEXION_OK",
+            "date_recup": datetime.now().strftime('%Y-%m-%d %H:%M')
+        }])
+        
+        # Tentative de lecture de l'existant
+        df_existant = conn.read(worksheet="stock_data", ttl=0)
+        
+        # Fusion et Envoi
+        df_final = pd.concat([df_existant, test_data], ignore_index=True)
+        conn.update(worksheet="stock_data", data=df_final)
+        
+        st.success("✅ Incroyable ! Le fichier Google Sheet a été mis à jour avec succès.")
+        st.dataframe(df_final)
+    except Exception as e:
+        st.error(f"L'écriture a échoué. Détails : {e}")
+        st.info("Vérifiez que vous avez partagé le Sheet avec l'e-mail du compte de service !")
