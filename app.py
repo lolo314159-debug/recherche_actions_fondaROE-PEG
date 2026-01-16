@@ -9,18 +9,19 @@ st.set_page_config(page_title="Screener Dynamique", layout="wide")
 def get_index_tickers(index_name):
     if index_name == "S&P 500":
         url = "https://en.wikipedia.org/wiki/List_of_S%26P_500_companies"
-        table = pd.read_html(url)[0]
-        # Yahoo utilise "-" au lieu de "." pour les classes d'actions (ex: BRK.B -> BRK-B)
-        return table['Symbol'].str.replace('.', '-', regex=True).tolist()
+        # On cherche la table qui contient la colonne 'Symbol'
+        tables = pd.read_html(url)
+        df = [t for t in tables if 'Symbol' in t.columns][0]
+        return df['Symbol'].str.replace('.', '-', regex=True).tolist()
     
     elif index_name == "CAC 40":
         url = "https://en.wikipedia.org/wiki/CAC_40"
-        table = pd.read_html(url)[4] # La 5ème table contient les composants
-        tickers = table['Ticker'].tolist()
-        # On s'assure que le suffixe .PA est présent pour Paris
+        # On cherche la table qui contient la colonne 'Ticker'
+        tables = pd.read_html(url)
+        df = [t for t in tables if 'Ticker' in t.columns][0]
+        tickers = df['Ticker'].tolist()
         return [t if t.endswith(".PA") else f"{t}.PA" for t in tickers]
     return []
-
 # --- ÉTAPE 2 : TÉLÉCHARGEMENT DES DONNÉES FONDAMENTALES ---
 @st.cache_data(ttl=3600)
 def fetch_fundamental_data(tickers):
