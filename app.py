@@ -1,27 +1,33 @@
 import streamlit as st
 import pandas as pd
 import yfinance as yf
+import requests
 
-st.set_page_config(page_title="Screener Dynamique", layout="wide")
-
-# --- ÉTAPE 1 : RÉCUPÉRATION DYNAMIQUE DES TICKERS ---
-@st.cache_data(ttl=86400) # Mise à jour une fois par 24h
+# --- ÉTAPE 1 : RÉCUPÉRATION AVEC SIGNATURE (USER-AGENT) ---
+@st.cache_data(ttl=86400)
 def get_index_tickers(index_name):
+    header = {
+      "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36"
+    }
+    
     if index_name == "S&P 500":
         url = "https://en.wikipedia.org/wiki/List_of_S%26P_500_companies"
-        # On cherche la table qui contient la colonne 'Symbol'
-        tables = pd.read_html(url)
+        res = requests.get(url, headers=header)
+        tables = pd.read_html(res.text)
         df = [t for t in tables if 'Symbol' in t.columns][0]
         return df['Symbol'].str.replace('.', '-', regex=True).tolist()
     
     elif index_name == "CAC 40":
         url = "https://en.wikipedia.org/wiki/CAC_40"
+        res = requests.get(url, headers=header)
+        tables = pd.read_html(res.text)
         # On cherche la table qui contient la colonne 'Ticker'
-        tables = pd.read_html(url)
         df = [t for t in tables if 'Ticker' in t.columns][0]
         tickers = df['Ticker'].tolist()
         return [t if t.endswith(".PA") else f"{t}.PA" for t in tickers]
     return []
+
+
 # --- ÉTAPE 2 : TÉLÉCHARGEMENT DES DONNÉES FONDAMENTALES ---
 @st.cache_data(ttl=3600)
 def fetch_fundamental_data(tickers):
