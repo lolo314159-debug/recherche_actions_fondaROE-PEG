@@ -4,89 +4,105 @@ import pandas as pd
 import yfinance as yf
 from datetime import datetime
 import requests
-import re
 
 # --- CONFIGURATION ---
-st.set_page_config(page_title="Screener Stable", layout="wide")
+st.set_page_config(page_title="Screener Définitif", layout="wide")
 conn = st.connection("gsheets", type=GSheetsConnection)
 
+# --- FONCTIONS DE BASE ---
 def get_data(sheet_name):
     try:
         return conn.read(worksheet=sheet_name, ttl=0)
     except:
-        if sheet_name == "index_composition":
-            return pd.DataFrame(columns=['indice', 'ticker', 'nom', 'date_recup'])
-        return pd.DataFrame(columns=['ticker', 'roe', 'peg', 'prix', 'date_recup'])
+        return pd.DataFrame()
 
 def save_data(df, sheet_name):
-    # Nettoyage ultime avant sauvegarde (supprime les tirets seuls)
-    if 'ticker' in df.columns:
-        df = df[df['ticker'].str.contains(r'[A-Za-z]', na=False)] 
-    
-    existing = get_data(sheet_name)
-    updated = pd.concat([existing, df], ignore_index=True)
-    updated = updated.drop_duplicates(subset=['ticker'], keep='last')
-    conn.update(worksheet=sheet_name, data=updated)
-    return True
+    try:
+        existing = get_data(sheet_name)
+        updated = pd.concat([existing, df], ignore_index=True).drop_duplicates(subset=['ticker'], keep='last')
+        conn.update(worksheet=sheet_name, data=updated)
+        return True
+    except:
+        return False
 
-# --- LOGIQUE PRINCIPALE ---
+# --- VARIABLES ---
 today = datetime.now().strftime('%Y-%m-%d')
 df_comp = get_data("index_composition")
 
-st.title("🛡️ Correction de la Collecte")
+st.title("🛡️ Screener Stable & Répertoire")
 
-# ETAPE 1 : NETTOYAGE DU RÉPERTOIRE
-with st.expander("📁 Étape 1 : Nettoyer le Répertoire des Tickers"):
-    if st.button("🧹 Nettoyer et Recharger les Tickers (S&P 500 & CAC 40)"):
-        with st.spinner("Nettoyage en cours..."):
+# --- ETAPE 1 : RÉPERTOIRE (index_composition) ---
+with st.expander("📁 Gérer le répertoire (index_composition)"):
+    if st.button("🔄 Forcer la mise à jour des indices"):
+        with st.spinner("Extraction intelligente..."):
             header = {"User-Agent": "Mozilla/5.0"}
             
-            # CAC 40
-            res_cac = requests.get("https://en.wikipedia.org/wiki/CAC_40", headers=header)
-            df_cac = pd.read_html(res_cac.text)[0][['Ticker', 'Company']]
-            df_cac.columns = ['ticker', 'nom']
-            df_cac['indice'] = 'CAC 40'
-            df_cac['ticker'] = df_cac['ticker'].apply(lambda x: f"{x}.PA" if ".PA" not in str(x) else x)
+            # CAC 40 - Détection flexible des colonnes
+            r_cac = requests.get("https://en.wikipedia.org/wiki/CAC_40", headers=header)
+            tabs_cac = pd.read_html(r_cac.text)
+            df_cac_raw = [t for t in tabs_cac if any('icker' in str(c) for c in t.columns)][0]
+            # On prend la 1ère colonne pour le ticker et la 2ème pour le nom
+            df_cac = pd.DataFrame({
+                'ticker': df_cac_raw.iloc[:, 0].astype(str) + ".PA",
+                'nom': df_cac_raw.iloc[:, 1],
+                'indice': 'CAC 40'
+            })
             
-            # S&P 500
-            res_sp = requests.get("https://en.wikipedia.org/wiki/List_of_S%26P_500_companies", headers=header)
-            df_sp = pd.read_html(res_sp.text)[0][['Symbol', 'Security']]
-            df_sp.columns = ['ticker', 'nom']
-            df_sp['indice'] = 'S&P 500'
-            df_sp['ticker'] = df_sp['ticker'].str.replace('.', '-', regex=True)
-
-            # FUSION ET FILTRE ANTI-TIRETS
-            final_comp = pd.concat([df_cac, df_sp])
-            # On ne garde que si le ticker contient au moins une lettre (exclut "----")
-            final_comp = final_comp[final_comp['ticker'].str.contains(r'[A-Za-z]', na=False)]
-            final_comp['date_recup'] = today
+            # S&P 500 - Détection flexible
+            r_sp = requests.get("https://en.wikipedia.org/wiki/List_of_S%26P_500_companies", headers=header)
+            df_sp_raw = pd.read_html(r_sp.text)[0]
+            df_sp = pd.DataFrame({
+                'ticker': df_sp_raw.iloc[:, 0].str.replace('.', '-', regex=True),
+                'nom': df_sp_raw.iloc[:, 1],
+                'indice': 'S&P 500'
+            })
             
-            # Écrase l'ancien répertoire pollué
-            conn.update(worksheet="index_composition", data=final_comp)
-            st.success("Répertoire nettoyé ! Les '---' ont été supprimés.")
+            # Nettoyage des tirets (image_2ede2f.png)
+            full_comp = pd.concat([df_cac, df_sp])
+            full_comp = full_comp[full_comp['ticker'].str.contains(r'[A-Za-z]', na=False)]
+            full_comp['date_recup'] = today
+            
+            conn.update(worksheet="index_composition", data=full_comp)
+            st.success("Répertoire mis à jour !")
             st.rerun()
+    
+    st.dataframe(df_comp, use_container_width=True, hide_index=True)
 
-# ETAPE 2 : ANALYSE À LA DEMANDE
+# --- ETAPE 2 : ANALYSE (stock_data) ---
 st.divider()
 if not df_comp.empty:
-    st.subheader("🔍 Étape 2 : Lancer une collecte propre")
-    # On affiche uniquement les vrais tickers dans la liste
-    clean_comp = df_comp[df_comp['ticker'].str.contains(r'[A-Za-z]', na=False)]
+    st.subheader("🔍 Analyse et mise à jour des données")
     
-    selected_stock_nom = st.selectbox("Sélectionner l'entreprise (nom)", clean_comp['nom'].sort_values())
-    ticker = clean_comp[clean_comp['nom'] == selected_stock_nom]['ticker'].values[0]
+    # On sélectionne dans le répertoire
+    col1, col2 = st.columns(2)
+    with col1:
+        target_idx = st.selectbox("Indice", df_comp['indice'].unique())
+    with col2:
+        list_stocks = df_comp[df_comp['indice'] == target_idx]['nom'].sort_values().tolist()
+        target_name = st.selectbox("Action", list_stocks)
     
-    if st.button(f"🚀 Analyser {selected_stock_nom} ({ticker})"):
-        try:
-            info = yf.Ticker(ticker).info
-            new_row = pd.DataFrame([{
-                "ticker": ticker,
-                "roe": round(info.get("returnOnEquity", 0) * 100, 2),
-                "peg": info.get("trailingPegRatio", info.get("pegRatio", 0)),
-                "prix": info.get("currentPrice", 0),
-                "date_recup": today
-            }])
-            save_data(new_row, "stock_data")
-            st.success(f"Données enregistrées pour {ticker} au {today}")
-        except Exception as e:
-            st.error(f"Erreur Yahoo pour {ticker}. Vérifiez le symbole.")
+    ticker = df_comp[df_comp['nom'] == target_name]['ticker'].values[0]
+    
+    if st.button(f"🚀 Analyser/Actualiser {target_name} ({ticker})"):
+        with st.spinner(f"Analyse de {ticker}..."):
+            try:
+                stock = yf.Ticker(ticker)
+                info = stock.info
+                new_data = pd.DataFrame([{
+                    "ticker": ticker,
+                    "roe": round(info.get("returnOnEquity", 0) * 100, 2),
+                    "peg": info.get("trailingPegRatio", info.get("pegRatio", 0)),
+                    "prix": info.get("currentPrice", 0),
+                    "date_recup": today
+                }])
+                if save_data(new_data, "stock_data"):
+                    st.success(f"Données de {ticker} enregistrées au {today}")
+            except Exception as e:
+                st.error(f"Erreur Yahoo : {e}")
+
+# --- ETAPE 3 : AFFICHAGE FINAL ---
+st.divider()
+df_res = get_data("stock_data")
+if not df_res.empty:
+    st.subheader("📊 Résultats archivés")
+    st.dataframe(df_res.sort_values("date_recup", ascending=False), use_container_width=True, hide_index=True)
