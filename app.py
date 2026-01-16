@@ -3,69 +3,63 @@ import yfinance as yf
 import pandas as pd
 
 # Configuration de la page
-st.set_page_config(page_title="Scanner Financier Pro", layout="wide")
+st.set_page_config(page_title="Fin-Scanner Online", layout="wide")
 
-st.title("📊 Analyseur d'Actions : Qualité & Croissance")
-
-# --- BARRE LATÉRALE : FILTRES ---
-st.sidebar.header("Filtres de Recherche")
-
-# Zone géographique (Exemple simplifié)
-region = st.sidebar.selectbox("Zone Géographique", ["USA", "Europe", "Asie"])
-
-# Sliders pour ROE et PEG
-min_roe = st.sidebar.slider("ROE Minimum (%)", 0, 50, 15)
-max_peg = st.sidebar.slider("PEG Maximum", 0.0, 5.0, 1.2)
-
-# --- RECHERCHE SPÉCIFIQUE ---
-st.sidebar.divider()
-st.sidebar.subheader("Recherche par Ticker")
-ticker_search = st.sidebar.text_input("Ex: AAPL, MSFT, LVMH.PA").upper()
-
-# --- LOGIQUE DE RÉCUPÉRATION ---
-def get_stock_data(ticker_list):
-    data = []
-    for t in ticker_list:
+# --- FONCTION DE RÉCUPÉRATION AVEC CACHE ---
+@st.cache_data(ttl=3600)  # Garde les données en mémoire 1 heure
+def load_data(tickers):
+    results = []
+    for t in tickers:
         try:
-            stock = yf.Ticker(t)
-            info = stock.info
-            data.append({
+            s = yf.Ticker(t)
+            info = s.info
+            results.append({
                 "Ticker": t,
-                "Nom": info.get("longName"),
-                "Secteur": info.get("sector"),
-                "ROE (%)": info.get("returnOnEquity", 0) * 100,
-                "PEG": info.get("trailingPegRatio", info.get("pegRatio", 0)),
-                "Prix": info.get("currentPrice"),
-                "Market Cap": info.get("marketCap")
+                "Nom": info.get("shortName"),
+                "ROE": info.get("returnOnEquity", 0),
+                "PEG": info.get("trailingPegRatio", 0),
+                "Secteur": info.get("sector")
             })
         except:
             continue
-    return pd.DataFrame(data)
+    return pd.DataFrame(results)
 
-# --- AFFICHAGE ---
-if ticker_search:
-    st.subheader(f"Analyse de {ticker_search}")
-    df_single = get_stock_data([ticker_search])
-    if not df_single.empty:
-        st.table(df_single)
-    else:
-        st.error("Ticker non trouvé.")
+# --- INTERFACE ---
+st.title("🚀 Screener Fondamental en Ligne")
 
-st.divider()
+# Listes d'actions par zone
+MARKETS = {
+    "USA (S&P500)": ["AAPL", "MSFT", "GOOGL", "AMZN", "META", "NVDA", "BRK-B"],
+    "France (CAC40)": ["MC.PA", "OR.PA", "TTE.PA", "SAN.PA", "AIR.PA", "RMS.PA"],
+    "Europe (Mix)": ["ASML", "SAP", "NVO", "SIE.DE", "IDEXY"]
+}
 
-st.subheader(f"🔍 Résultats du Screen ({region})")
-# Simulation d'une liste (Dans un vrai projet, on itérerait sur un index comme le S&P500)
-tickers_demo = ["AAPL", "GOOGL", "MSFT", "TSLA", "META", "NVDA", "ASML", "MC.PA"]
-df_screen = get_stock_data(tickers_demo)
+with st.sidebar:
+    st.header("Paramètres")
+    zone = st.selectbox("Choisir une zone", list(MARKETS.keys()))
+    roe_min = st.number_input("ROE Minimum (ex: 0.15 pour 15%)", value=0.15)
+    peg_max = st.number_input("PEG Maximum", value=1.5)
+    
+    st.divider()
+    ticker_input = st.text_input("Recherche rapide (ex: TSLA)").upper()
 
-# Application des filtres
-filtered_df = df_screen[
-    (df_screen["ROE (%)"] >= min_roe) & 
-    (df_screen["PEG"] <= max_peg) & 
-    (df_screen["PEG"] > 0)
-]
+# --- LOGIQUE ---
+data_load_state = st.text('Chargement des données du marché...')
+df = load_data(MARKETS[zone])
+data_load_state.empty()
 
-if not filtered_df.empty:
-    st.dataframe(filtered_df.sort_values("ROE (%)", ascending=False), use_container_width=True)
-else:
-    st.info("Aucune action ne correspond à ces critères actuellement.")
+# Filtrage
+filtered_df = df[(df['ROE'] >= roe_min) & (df['PEG'] <= peg_max) & (df['PEG'] > 0)]
+
+# Affichage
+col1, col2 = st.columns([2, 1])
+
+with col1:
+    st.subheader(f"Résultats pour {zone}")
+    st.dataframe(filtered_df, use_container_width=True)
+
+with col2:
+    if ticker_input:
+        st.subheader(f"Focus : {ticker_input}")
+        single_data = load_data([ticker_input])
+        st.write(single_data)
