@@ -37,11 +37,15 @@ today = datetime.now().strftime('%Y-%m-%d')
 header = {"User-Agent": "Mozilla/5.0"}
 if index_choice == "S&P 500":
     url = "https://en.wikipedia.org/wiki/List_of_S%26P_500_companies"
-    wiki_tickers = pd.read_html(requests.get(url, headers=header).text)[0]['Symbol'].str.replace('.', '-', regex=True).tolist()
+    df_wiki = pd.read_html(requests.get(url, headers=header).text)[0]
+    # On ne garde que les vrais symboles (lettres uniquement, max 5 caractères)
+    raw_tickers = df_wiki['Symbol'].str.replace('.', '-', regex=True).tolist()
+    wiki_tickers = [t for t in raw_tickers if isinstance(t, str) and len(t) <= 5 and t.isalpha() or '-' in t]
 else:
     url = "https://en.wikipedia.org/wiki/CAC_40"
     df_wiki = [t for t in pd.read_html(requests.get(url, headers=header).text) if 'Ticker' in t.columns][0]
-    wiki_tickers = [f"{t}.PA" if not str(t).endswith(".PA") else t for t in df_wiki['Ticker']]
+    wiki_tickers = [f"{t}.PA" for t in df_wiki['Ticker'] if len(str(t)) <= 5]
+
 
 # Comparaison avec la base
 stored_df = get_sheet_data()
