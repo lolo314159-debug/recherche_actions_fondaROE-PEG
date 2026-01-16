@@ -2,96 +2,87 @@ import streamlit as st
 from streamlit_gsheets import GSheetsConnection
 import pandas as pd
 import yfinance as yf
-import requests
 from datetime import datetime
-import time
+import requests
 
-# --- 1. CONFIG ET CONNEXION ---
-st.set_page_config(page_title="Screener S&P 500", layout="wide")
+# --- 1. CONFIGURATION ---
+st.set_page_config(page_title="Screener Stable Pro", layout="wide")
 conn = st.connection("gsheets", type=GSheetsConnection)
 
-# --- 2. FONCTIONS (SANS CHANGEMENT) ---
-def get_sheet_data():
+# --- 2. FONCTIONS DE LECTURE / ÉCRITURE ---
+def get_data(sheet_name):
     try:
-        return conn.read(worksheet="stock_data", ttl=0)
+        return conn.read(worksheet=sheet_name, ttl=0)
     except:
+        # Retourne un DataFrame vide avec les bonnes colonnes si la feuille n'existe pas
+        if sheet_name == "index_composition":
+            return pd.DataFrame(columns=['indice', 'ticker', 'nom', 'date_recup'])
         return pd.DataFrame(columns=['ticker', 'roe', 'peg', 'prix', 'date_recup'])
 
-def save_to_sheet(new_data):
+def save_data(df, sheet_name):
     try:
-        new_data = new_data[new_data['prix'] > 0]
-        if new_data.empty: return True
-        existing = get_sheet_data()
-        updated = pd.concat([existing, new_data], ignore_index=True)
-        updated = updated.drop_duplicates(subset=['ticker', 'date_recup'], keep='last')
-        conn.update(worksheet="stock_data", data=updated)
+        existing = get_data(sheet_name)
+        # Fusion et suppression des doublons sur le ticker
+        updated = pd.concat([existing, df], ignore_index=True)
+        updated = updated.drop_duplicates(subset=['ticker'], keep='last')
+        conn.update(worksheet=sheet_name, data=updated)
         return True
-    except:
+    except Exception as e:
+        st.error(f"Erreur de sauvegarde : {e}")
         return False
 
-# --- 3. LOGIQUE DE CALCUL (DOIT ÊTRE ICI) ---
-index_choice = st.sidebar.selectbox("Indice", ["S&P 500", "CAC 40"])
+# --- 3. CHARGEMENT DES DONNÉES ---
+df_comp = get_data("index_composition")
 today = datetime.now().strftime('%Y-%m-%d')
 
-# Récupération Wikipedia
-header = {"User-Agent": "Mozilla/5.0"}
-if index_choice == "S&P 500":
-    url = "https://en.wikipedia.org/wiki/List_of_S%26P_500_companies"
-    df_wiki = pd.read_html(requests.get(url, headers=header).text)[0]
-    # On ne garde que les vrais symboles (lettres uniquement, max 5 caractères)
-    raw_tickers = df_wiki['Symbol'].str.replace('.', '-', regex=True).tolist()
-    wiki_tickers = [t for t in raw_tickers if isinstance(t, str) and len(t) <= 5 and t.isalpha() or '-' in t]
-else:
-    url = "https://en.wikipedia.org/wiki/CAC_40"
-    df_wiki = [t for t in pd.read_html(requests.get(url, headers=header).text) if 'Ticker' in t.columns][0]
-    wiki_tickers = [f"{t}.PA" for t in df_wiki['Ticker'] if len(str(t)) <= 5]
-
-
-# Comparaison avec la base
-stored_df = get_sheet_data()
-synced_today = []
-if not stored_df.empty and 'date_recup' in stored_df.columns:
-    synced_today = stored_df[stored_df['date_recup'] == today]['ticker'].tolist()
-
-# ICI ON DÉFINIT ENFIN LA VARIABLE QUI POSAIT ERREUR
-missing_tickers = [t for t in wiki_tickers if t not in synced_today]
-
 # --- 4. INTERFACE ---
-st.title("🛡️ Analyse S&P 500 en cours")
-c1, c2, c3 = st.columns(3)
-c1.metric("Total Indice", len(wiki_tickers))
-c2.metric("Déjà en base", len(synced_today))
-c3.metric("Restant à scanner", len(missing_tickers))
+st.title("🛡️ Screener Stable avec Date de Récupération")
 
-if len(missing_tickers) > 0:
-    if st.button(f"🚀 Lancer le scan des {len(missing_tickers)} actions"):
-        new_records = []
-        bar = st.progress(0)
-        status = st.empty()
-        
-        for i, t in enumerate(missing_tickers):
-            try:
-                status.text(f"Extraction Yahoo : {t} ({i+1}/{len(missing_tickers)})")
-                info = yf.Ticker(t).info
-                p = info.get("currentPrice")
-                if p:
-                    new_records.append({
-                        "ticker": t,
-                        "roe": round(info.get("returnOnEquity", 0) * 100, 2),
-                        "peg": info.get("trailingPegRatio", info.get("pegRatio", 0)),
-                        "prix": p,
-                        "date_recup": today
-                    })
-                
-                # Sauvegarde par mini-blocs de 5 pour voir le Sheet se remplir
-                if len(new_records) >= 5:
-                    save_to_sheet(pd.DataFrame(new_records))
-                    new_records = []
-                time.sleep(0.4)
-            except:
-                continue
-            bar.progress((i + 1) / len(missing_tickers))
-        
-        if new_records:
-            save_to_sheet(pd.DataFrame(new_records))
-        st.rerun()
+# SECTION 1 : RÉPERTOIRE DES INDICES
+with st.expander("📁 Étape 1 : Gérer la composition des indices (Répertoire)"):
+    st.write("Cette section remplit votre onglet `index_composition`.")
+    
+    if st.button("🔄 Actualiser la liste complète (CAC 40 & S&P 500)"):
+        with st.spinner("Récupération des listes Wikipedia..."):
+            header = {"User-Agent": "Mozilla/5.0"}
+            
+            # CAC 40
+            url_cac = "https://en.wikipedia.org/wiki/CAC_40"
+            df_cac = pd.read_html(requests.get(url_cac, headers=header).text)
+            df_cac = [t for t in df_cac if 'Ticker' in t.columns][0]
+            df_cac = df_cac[['Ticker', 'Company']].rename(columns={'Ticker': 'ticker', 'Company': 'nom'})
+            df_cac['indice'] = 'CAC 40'
+            df_cac['ticker'] = df_cac['ticker'].apply(lambda x: f"{x}.PA" if ".PA" not in str(x) else x)
+            
+            # S&P 500
+            url_sp = "https://en.wikipedia.org/wiki/List_of_S%26P_500_companies"
+            df_sp = pd.read_html(requests.get(url_sp, headers=header).text)[0]
+            df_sp = df_sp[['Symbol', 'Security']].rename(columns={'Symbol': 'ticker', 'Security': 'nom'})
+            df_sp['indice'] = 'S&P 500'
+            df_sp['ticker'] = df_sp['ticker'].str.replace('.', '-', regex=True)
+            
+            final_comp = pd.concat([df_cac, df_sp])
+            final_comp['date_recup'] = today  # Date ajoutée ici pour le répertoire
+            
+            if save_data(final_comp, "index_composition"):
+                st.success("Répertoire mis à jour avec succès !")
+                st.rerun()
+
+    if not df_comp.empty:
+        st.dataframe(df_comp, use_container_width=True, hide_index=True)
+
+# SECTION 2 : RECHERCHE ET ANALYSE
+st.divider()
+st.subheader("🔍 Étape 2 : Analyse financière à la demande")
+
+if not df_comp.empty:
+    c1, c2 = st.columns(2)
+    with c1:
+        idx = st.selectbox("Choisir l'indice", df_comp['indice'].unique())
+    with c2:
+        # Filtrage par nom pour faciliter la lecture humaine
+        names = df_comp[df_comp['indice'] == idx]['nom'].sort_values().tolist()
+        selected_name = st.selectbox("Sélectionner l'action", names)
+    
+    # Récupération du ticker correspondant
+    ticker = df_comp[df_comp['nom'] == selected
